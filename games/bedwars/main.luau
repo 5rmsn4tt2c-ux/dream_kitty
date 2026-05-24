@@ -1153,7 +1153,7 @@ run(function()
 				pos,
 				cost,
 				path,
-				tick() + closestPosition and 0.1 or 1
+				tick() + 1
 			}
             return pos, cost, path
         end
