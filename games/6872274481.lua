@@ -543,7 +543,7 @@ local sortmethods, breakmethods = {
 	Distance = function(a)
 		local pos = (entitylib.isAlive and (entitylib.character.RootPart.Position - Vector3.new(0, 1, 0)) or Vector3.zero)
 		return (pos - Vector3.new(a.Position.X, pos.Y, a.Position.Z)).Magnitude
-	end,
+	end
 }
 
 run(function()
@@ -1109,10 +1109,17 @@ run(function()
 		Pathfinding using a luau version of dijkstra's algorithm
 		Source: https://stackoverflow.com/questions/39355587/speeding-up-dijkstras-algorithm-to-solve-a-3d-maze
 	]]
-	local function calculatePath(target, blockpos, method, angle)
-		if cache[blockpos] and cache[blockpos][4] > tick() then
-			return unpack(cache[blockpos])
+	local function isMinable(pos)
+		for _, side in {Vector3.new(0, 3, 0), Vector3.new(3, 0, 0), Vector3.new(0, 0, 3)} do
+			side = pos + side
+			local block = getPlacedBlock(side)
+			if block and (block:GetAttribute("PlacedByUserId") or 0) ~= 0 then
+				return false
+			end
 		end
+		return true
+	end
+	local function calculatePath(target, blockpos, method, angle, wallcheck)
 		local visited, unvisited, distances, air, path = {}, {{0, blockpos}}, {[blockpos] = 0}, {}, {}
 
 		for _ = 1, 10000 do
@@ -1148,7 +1155,7 @@ run(function()
 
 		local pos, cost = nil, math.huge
 		for node in air do
-			if distances[node] < cost then
+			if distances[node] < cost and (not wallcheck or isMinable(node)) then
 				pos, cost = node, distances[node]
 			end
 		end
@@ -1158,7 +1165,6 @@ run(function()
 				pos,
 				cost,
 				path,
-				tick() + (inputService.TouchEnabled and 9e9 or 1)
 			}
 			return pos, cost, path
 		end
@@ -1172,14 +1178,14 @@ run(function()
 		end
 	end
 
-	bedwars.breakBlock = function(block, effects, anim, customHealthbar, visualise, sort, angle)
+	bedwars.breakBlock = function(block, effects, anim, customHealthbar, visualise, sort, angle, wallcheck)
 		if lplr:GetAttribute('DenyBlockBreak') or not entitylib.isAlive or InfiniteFly.Enabled then return end
 
 		local handler = bedwars.BlockController:getHandlerRegistry():getHandler(block.Name)
 		local cost, pos, target, path = math.huge, nil, nil, nil
 
 		for _, v in (handler and handler:getContainedPositions(block) or {block.Position / 3}) do
-			local dpos, dcost, dpath = calculatePath(block, v * 3, sort, angle or 360)
+			local dpos, dcost, dpath = calculatePath(block, v * 3, sort, angle or 360, wallcheck)
 			if dpos and dcost < cost then
 				cost, pos, target, path = dcost, dpos, v * 3, dpath
 			end
@@ -3575,7 +3581,7 @@ run(function()
                 Fly:Clean(runService.PreSimulation:Connect(function(dt)
                     if entitylib.isAlive and not InfiniteFly.Enabled and isnetworkowner(entitylib.character.RootPart) then
                         local flyAllowed = (lplr.Character:GetAttribute('InflatedBalloons') and lplr.Character:GetAttribute('InflatedBalloons') > 0) or store.matchState == 2
-                        local mass = (1.5 + (flyAllowed and 6 or 0) * (tick() % 0.4 < 0.2 and -1 or 1)) + ((up + down) * VerticalValue.Value)
+                        local mass = (0.9 + (flyAllowed and 6 or 0) * (tick() % 0.4 < 0.2 and -1 or 1)) + ((up + down) * VerticalValue.Value)
                         local root, moveDirection = entitylib.character.RootPart, entitylib.character.Humanoid.MoveDirection
                         local velo = getSpeed()
                         local destination = (moveDirection * math.max(Value.Value - velo, 0) * dt)
@@ -3793,6 +3799,119 @@ run(function()
             end
         end,
         Tooltip = 'Gives you +10 shield infinitely'
+    })
+end)
+
+run(function()
+    local InstantKill
+    local Mode
+    local Range
+    local Place
+    
+    local function getTurret(localPosition)
+        for _, v in store.blocks do
+            if v.Name == 'camera_turret' and v:GetAttribute('PlacedByUserId') == lplr.UserId and (localPosition - v.Position).Magnitude <= 30 then
+                return v
+            end
+        end
+        return nil
+    end
+    
+    local function getPlacedPosition(pos)
+        for _, v in {Vector3.new(3, 0, 0), Vector3.new(0, 0, 3)} do
+            for i = 1, 10 do
+                local ray = workspace:Blockcast(CFrame.new(pos + (v * i)), Vector3.new(3, 3, 3), Vector3.new(0, -30, 0), store.airRay)
+                if ray and not getPlacedBlock(ray.Position) then
+                    return roundPos(ray.Position)
+                end
+            end
+        end
+        return
+    end
+    
+    InstantKill = vape.Categories.Blatant:CreateModule({
+        Name = 'Instant Kill',
+        Function = function(callback)
+            if callback then
+                repeat task.wait() until store.matchState ~= 0 or not InstantKill.Enabled
+                if not InstantKill.Enabled then return end
+                if store.equippedKit ~= 'vulcan' then
+                    notif('InstantKill', 'You need vulcan equipped for this!', 8, 'warning')
+                    return
+                end
+    
+                local delay, pickups = 0, {}
+                repeat
+                    if entitylib.isAlive and tick() > delay then
+                        local localPosition = entitylib.character.RootPart.Position
+                        local ent = entitylib.EntityPosition({
+                            Origin = localPosition,
+                            Range = Range.Value,
+                            Part = 'RootPart',
+                            Players = true,
+                            Wallcheck = true,
+                            Sort = sortmethods.Health,
+                        })
+                        if ent then
+                            local turret = getTurret(localPosition)
+                            local tablet = getItem('tablet')
+                            if not turret and Place.Enabled then
+                                local pos = getPlacedPosition(localPosition)
+                                local item = getItem('camera_turret')
+                                if pos and item then
+                                    bedwars.placeBlock(pos, 'camera_turret', false)
+                                    turret = getPlacedPosition(pos)
+                                    if turret then
+                                        table.insert(pickups, turret)
+                                    end
+                                end
+                            end
+                            if turret and tablet then
+                                switchItem(tablet.tool)
+                                for i = 1, 12 do
+                                    task.spawn(function()
+                                        bedwars.Client:Get('VulcanArtilleryMark'):CallServer(ent.Player)
+                                    end)
+                                end
+                                delay = tick() + 2
+                            end
+                        end
+                    end
+                    if Mode.Value == 'On bind' then
+                        if #pickups > 0 then
+                            task.wait(0.1)
+                            for _, v in pickups do
+                            
+                            end
+                        end
+                        InstantKill:Toggle()
+                        break
+                    end
+                    task.wait(0.1)
+                until not InstantKill.Enabled
+            end
+        end,
+        Tooltip = 'Automatically uses turret to instant kill targets.'
+    })
+    
+    Mode = InstantKill:CreateDropdown({
+        Name = 'Mode',
+        List = {'Toggle', 'On bind'},
+        Default = 'Toggle'
+    })
+    Range = InstantKill:CreateSlider({
+        Name = 'Range',
+        Min = 1,
+        Max = 100,
+        Default = 50,
+        Suffix = function(val)
+            return val <= 1 and 'stud' or 'studs'
+        end
+    })
+    Place = InstantKill:CreateToggle({
+        Name = 'Auto place',
+        Tooltip = 'Automatically places turrets if can\'t find any on ground.',
+        Default = true
     })
 end)
 
@@ -4240,8 +4359,8 @@ run(function()
     SwingRange = Killaura:CreateSlider({
         Name = 'Swing range',
         Min = 1,
-        Max = 28,
-        Default = 28,
+        Max = 40,
+        Default = 22,
         Suffix = function(val)
             return val == 1 and 'stud' or 'studs'
         end
@@ -4249,8 +4368,8 @@ run(function()
     AttackRange = Killaura:CreateSlider({
         Name = 'Attack range',
         Min = 1,
-        Max = 20,
-        Default = 20,
+        Max = 22,
+        Default = 22,
         Suffix = function(val)
             return val == 1 and 'stud' or 'studs'
         end
@@ -4276,11 +4395,11 @@ run(function()
         Default = 0.11,
         Suffix = 'seconds'
     })
-    --[[Sync = Killaura:CreateToggle({
+    Sync = Killaura:CreateToggle({
         Name = 'Sync with hitreg',
         Darker = true,
-        Tooltip = 'Syncs the swing time with hitreg'
-    })]]
+        Tooltip = 'Syncs the hitreg with swing time'
+    })
     UpdateRate = Killaura:CreateSlider({
         Name = 'Update rate',
         Min = 1,
@@ -9460,13 +9579,17 @@ run(function()
                 end
             end))
         end,
-        Reach = function()
+        Reach = function() -- this is so disgusting, but whatever
             CheatDetector:Clean(shared.bindable.Event:Connect(function(damageTable)
                 if damageTable.damageType == 0 and damageTable.fromEntity then
-                    local magnitude = (damageTable.fromEntity.PrimaryPart.Position - damageTable.entityInstance.PrimaryPart.Position).Magnitude
-                    if magnitude > (18 + lplr:GetNetworkPing()) then
-                        local player = playersService:GetPlayerFromCharacter(damageTable.fromEntity)
-                        if player and player ~= lplr then
+                    local player = playersService:GetPlayerFromCharacter(damageTable.fromEntity) 
+                    if player and player ~= lplr then
+                        local magnitude = (damageTable.fromEntity.PrimaryPart.Position - damageTable.entityInstance.PrimaryPart.Position).Magnitude
+                        local held = (store.inventories[player] or {}).hand
+                        local meta = held and bedwars.ItemMeta[held.tool.Name].sword or nil
+                        local reach = math.floor(meta and meta.attackRange or 14.4) + 4
+                        
+                        if magnitude > (reach + lplr:GetNetworkPing()) then
                             Added(player, 'Reach')
                         end
                     end
@@ -9681,6 +9804,30 @@ run(function()
     	DefaultMax = 200,
     })
     TargetCheck = KnockbackDelay:CreateToggle({ Name = 'Target check' })
+end)
+
+run(function()
+    local old
+    
+    vape.Categories.Kits:CreateModule({
+        Name = 'Krystal Disabler',
+        Function = function(callback)
+            if callback then
+                bedwars.GlacialSkaterController:updateMomentum(9e9)
+                old = bedwars.GlacialSkaterController.updateMomentum
+                bedwars.GlacialSkaterController.updateMomentum = function(self)
+                    self.momentum = 9e9
+                    self.lastMomentumReport = 9e9
+                    bedwars.Client:Get('MomentumUpdate'):SendToServer({
+                        momentumValue = 9e9
+                    })
+                end
+                bedwars.GlacialSkaterController:updateMomentum()
+            else
+                bedwars.GlacialSkaterController.updateMomentum = old
+            end
+        end
+    })
 end)
 
 run(function()
@@ -13066,10 +13213,12 @@ run(function()
     local SelfBreak
     local InstantBreak
     local LimitItem
+    local Nuker
+    local Closet
     local customlist, parts = {}, {}
     
     local function customHealthbar(self, blockRef, health, maxHealth, changeHealth, block)
-        if block:GetAttribute('NoHealthbar') then return end
+        --if block:GetAttribute('NoHealthbar') then return end
         if not self.healthbarPart or not self.healthbarBlockRef or self.healthbarBlockRef.blockPosition ~= blockRef.blockPosition then
             self.healthbarMaid:DoCleaning()
             self.healthbarBlockRef = blockRef
@@ -13170,6 +13319,31 @@ run(function()
     
     local hit = 0
     
+    local function getMousePosition()
+    	local suc, mouseinfo = pcall(function()
+            return bedwars.BlockBreaker.clientManager:getBlockSelector():getMouseInfo(0)
+        end)
+    
+        if suc and mouseinfo then
+            if mouseinfo.target and mouseinfo.target.blockRef then
+                return mouseinfo.target.blockRef.blockPosition * 3
+            end
+            if mouseinfo.placementPosition then
+                return mouseinfo.placementPosition * 3
+            end
+        end
+        return nil
+    end
+    
+    local cache, cacheExpire = nil, 0
+    local function closetMethod(block)
+        if tick() > cacheExpire or not cache then
+            cache = getMousePosition() or entitylib.character.RootPart.Position
+            cacheExpire = tick() + 0.01
+        end
+        return (cache - block.Position).Magnitude
+    end
+    
     local function attemptBreak(tab, localPosition)
         if not tab then return end
         for _, v in tab do
@@ -13179,7 +13353,7 @@ run(function()
                 if LimitItem.Enabled and not (store.hand.tool and bedwars.ItemMeta[store.hand.tool.Name].breakBlock) then continue end
     
                 hit += 1
-                local target, path, endpos = bedwars.breakBlock(v, Effect.Enabled, Animation.Enabled, CustomHealth.Enabled and customHealthbar or nil, AutoTool.Enabled, breakmethods[Mode.Value], Angle.Value)
+                local target, path, endpos = bedwars.breakBlock(v, Effect.Enabled, Animation.Enabled, CustomHealth.Enabled and customHealthbar or nil, AutoTool.Enabled, Closet.Enabled and closetMethod or breakmethods[Mode.Value], Angle.Value, not Nuker.Enabled)
                 if path then
                     local currentnode = target
                     for _, part in parts do
@@ -13364,6 +13538,17 @@ run(function()
     SelfBreak = Breaker:CreateToggle({Name = 'Self Break'})
     InstantBreak = Breaker:CreateToggle({Name = 'Instant Break'})
     AutoTool = Breaker:CreateToggle({Name = 'Auto Tool'})
+    Nuker = Breaker:CreateToggle({
+        Name = 'Break through blocks', 
+        Tooltip = 'Ignores blocks around bed defense, and check if the server validates where ur breaking'
+    })
+    Closet =  Breaker:CreateToggle({
+        Name = 'Closet break',
+        Tooltip = 'Uses ur mouse\'s position to get the closet block to you',
+        Function = function(callback)
+            Mode.Object.Visible = not callback
+        end
+    })
     LimitItem = Breaker:CreateToggle({
         Name = 'Limit to items',
         Tooltip = 'Only breaks when tools are held'
@@ -13681,6 +13866,105 @@ run(function()
     	Suffix = function(val)
     		return val <= 1 and 'stud' or 'studs'
     	end
+    })
+end)
+
+run(function()
+    local AutoCobalt -- made by ba0
+    local HitboxSize
+    local RestoreOnDisable
+    
+    local originalProperties = {}
+    local workspaceConnection
+    
+    -- Helper function to expand the hitbox of a specific battery model
+    local function expandBattery(obj, size)
+        if obj.Name == "Open" and obj:IsA("Model") then
+            -- Verify it is a Cobalt battery
+            if obj:FindFirstChild("Invertedneon") or obj:FindFirstChild("Top") then
+                task.wait(0.1)
+                -- Stop execution if the module was toggled off during wait
+                if not AutoCobalt.Enabled then return end
+                
+                for _, part in ipairs(obj:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        -- Store original properties before modifying them
+                        if not originalProperties[part] then
+                            originalProperties[part] = {
+                                Size = part.Size,
+                                CanCollide = part.CanCollide,
+                                CanTouch = part.CanTouch
+                            }
+                        end
+                        
+                        part.CanCollide = false
+                        part.CanTouch = true
+                        part.Size = Vector3.new(size, size, size)
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Restores all modified parts to their original state
+    local function restoreAllProperties()
+        for part, props in pairs(originalProperties) do
+            pcall(function()
+                if part and part.Parent then
+                    part.Size = props.Size
+                    part.CanCollide = props.CanCollide
+                    part.CanTouch = props.CanTouch
+                end
+            end)
+        end
+        table.clear(originalProperties)
+    end
+    
+    AutoCobalt = vape.Categories.Kits:CreateModule({
+        Name = 'Auto Cobalt',
+        Function = function(callback)
+            if callback then
+                -- Scan existing parts in the workspace
+                for _, descendant in ipairs(workspace:GetDescendants()) do
+                    task.spawn(expandBattery, descendant, HitboxSize.Value)
+                end
+    
+                -- Monitor for new battery spawns
+                workspaceConnection = workspace.DescendantAdded:Connect(function(descendant)
+                    task.spawn(expandBattery, descendant, HitboxSize.Value)
+                end)
+                AutoCobalt:Clean(workspaceConnection)
+            else
+                -- Disconnect listener on toggle off
+                if workspaceConnection then
+                    workspaceConnection:Disconnect()
+                    workspaceConnection = nil
+                end
+                
+                -- Restore properties if the option is active
+                if RestoreOnDisable.Enabled then
+                    restoreAllProperties()
+                else
+                    table.clear(originalProperties)
+                end
+            end
+        end,
+        Tooltip = 'Expands the touch detection area of Cobalt batteries to collect them instantly'
+    })
+    
+    HitboxSize = AutoCobalt:CreateSlider({
+        Name = 'Hitbox Size',
+        Min = 1,
+        Max = 1000,
+        Default = 1000,
+        Suffix = ' studs',
+        Tooltip = 'The dimension size applied to the battery components'
+    })
+    
+    RestoreOnDisable = AutoCobalt:CreateToggle({
+        Name = 'Restore on disable',
+        Default = true,
+        Tooltip = 'Reverts the size of active batteries when this feature is turned off'
     })
 end)
 

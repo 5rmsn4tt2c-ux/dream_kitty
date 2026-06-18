@@ -21,6 +21,7 @@ local mainapi = {
 	ThreadFix = setthreadidentity and true or false,
 	ToggleNotifications = {},
 	Version = '4.18',
+	ToggleMode = {Value = 'Toggle'},
 	Windows = {}
 }
 
@@ -6296,6 +6297,12 @@ guipane:CreateDropdown({
 	end,
 	Tooltip = 'new - The newest vape theme to since v4.05\nold - The vape theme pre v4.05\nrise - Rise 6.0'
 })
+mainapi.ToggleMode = guipane:CreateDropdown({
+	Name = 'Keybind mode',
+	List = {'Toggle', 'Held'},
+	Tooltip = 'Toggle - Keybind always activates when input starts or end\nHeld - Activates when input starts, Deactivate when input ends',
+	Default = 'Toggle'
+})
 mainapi.RainbowMode = guipane:CreateDropdown({
 	Name = 'Rainbow Mode',
 	List = {'Normal', 'Gradient', 'Retro'},
@@ -7207,8 +7214,17 @@ mainapi:Clean(notifications.ChildRemoved:Connect(function()
 	end
 end))
 
-mainapi:Clean(inputService.InputBegan:Connect(function(inputObj)
-	if not inputService:GetFocusedTextBox() and inputObj.KeyCode ~= Enum.KeyCode.Unknown then
+local whitelist = {Enum.UserInputType.MouseButton2, Enum.UserInputType.MouseButton3}
+local function convert(input)
+	warn(tostring(input))
+	return {KeyCode = {Name = input == Enum.UserInputType.MouseButton2 and 'MB2' or input == Enum.UserInputType.MouseButton1 and 'MB1' or 'MB3'}}
+end
+local function keybindStart(inputObj)
+	if not inputService:GetFocusedTextBox() and (inputObj.KeyCode ~= Enum.KeyCode.Unknown or table.find(whitelist, inputObj.UserInputType)) then
+		if table.find(whitelist, inputObj.UserInputType) then
+			inputObj = convert(inputObj.UserInputType)
+		end
+		
 		table.insert(mainapi.HeldKeybinds, inputObj.KeyCode.Name)
 		if mainapi.Binding then return end
 
@@ -7246,10 +7262,12 @@ mainapi:Clean(inputService.InputBegan:Connect(function(inputObj)
 			end
 		end
 	end
-end))
-
-mainapi:Clean(inputService.InputEnded:Connect(function(inputObj)
-	if not inputService:GetFocusedTextBox() and inputObj.KeyCode ~= Enum.KeyCode.Unknown then
+end
+local function keybindEnd(inputObj)
+	if not inputService:GetFocusedTextBox() and (inputObj.KeyCode ~= Enum.KeyCode.Unknown or table.find(whitelist, inputObj.UserInputType)) then
+		if table.find(whitelist, inputObj.UserInputType) then
+			inputObj = convert(inputObj.UserInputType)
+		end
 		if mainapi.Binding then
 			if not mainapi.MultiKeybind.Enabled then
 				mainapi.HeldKeybinds = {inputObj.KeyCode.Name}
@@ -7262,6 +7280,18 @@ mainapi:Clean(inputService.InputEnded:Connect(function(inputObj)
 	local ind = table.find(mainapi.HeldKeybinds, inputObj.KeyCode.Name)
 	if ind then
 		table.remove(mainapi.HeldKeybinds, ind)
+	end
+end
+mainapi:Clean(inputService.InputBegan:Connect(keybindStart))
+
+mainapi:Clean(inputService.InputEnded:Connect(function(inputObj)
+	if table.find(whitelist, inputObj.UserInputType) then
+		inputObj = convert(inputObj.UserInputType)
+	end
+	if mainapi.ToggleMode.Value == "Held" and not table.find(mainapi.Keybind, ({tostring(inputObj.KeyCode):gsub("Enum.KeyCode.", "")})[1]) then
+		keybindStart(inputObj)
+	else
+		keybindEnd(inputObj)
 	end
 end))
 
